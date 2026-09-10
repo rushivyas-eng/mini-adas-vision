@@ -1,6 +1,13 @@
+from matplotlib.path import Path
+
+
 class ADASAnalyzer:
     """
     Simple ADAS analysis based on detected objects.
+
+    The spatial and risk calculations in this class
+    are heuristic approximations for learning purposes.
+    They are NOT collision probabilities.
     """
 
     VEHICLES = {
@@ -15,8 +22,203 @@ class ADASAnalyzer:
         "bicycle"
     }
 
-    def __init__(self, detections):
+    OBJECT_WEIGHTS = {
+        "person": 1.0,
+        "motorcycle": 1.0,
+        "bicycle": 1.0,
+        "car": 0.7,
+        "truck": 0.7,
+        "bus": 0.7
+    }
+
+    VERTICAL_WEIGHTS = {
+        "far": 0.3,
+        "middle": 0.6,
+        "near": 1.0
+    }
+
+    def __init__(
+        self,
+        detections,
+        danger_zone=None
+    ):
         self.detections = detections
+
+        # Relative coordinates:
+        # (x, y) where x and y range from 0 to 1.
+        self.danger_zone = danger_zone or [
+            (0.42, 0.40),
+            (0.58, 0.40),
+            (0.90, 1.00),
+            (0.10, 1.00)
+        ]
+
+    def get_box_center(self, box):
+        """
+        Calculate the center of a bounding box.
+
+        box:
+            [xmin, ymin, xmax, ymax]
+        """
+
+        xmin, ymin, xmax, ymax = box
+
+        center_x = (xmin + xmax) / 2
+        center_y = (ymin + ymax) / 2
+
+        return center_x, center_y
+
+    def get_vertical_zone(
+        self,
+        center_y,
+        image_height
+    ):
+        """
+        Classify an object's vertical position.
+        """
+
+        relative_y = center_y / image_height
+
+        if relative_y < 0.4:
+            return "far"
+
+        elif relative_y < 0.65:
+            return "middle"
+
+        else:
+            return "near"
+
+    def is_inside_danger_zone(
+        self,
+        center_x,
+        center_y,
+        image_width,
+        image_height
+    ):
+        """
+        Check whether an object's center lies
+        inside the approximate ego-lane corridor.
+        """
+
+        points = [
+            (
+                x * image_width,
+                y * image_height
+            )
+            for x, y in self.danger_zone
+        ]
+
+        polygon = Path(points)
+
+        return polygon.contains_point(
+            (center_x, center_y)
+        )
+
+    def calculate_risk_score(
+        self,
+        detection,
+        inside_zone,
+        vertical_zone
+    ):
+        """
+        Calculate a simple heuristic risk score.
+
+        This is NOT a collision probability.
+        """
+
+        label = detection["label"]
+        confidence = detection["score"]
+
+        object_weight = self.OBJECT_WEIGHTS.get(
+            label,
+            0.5
+        )
+
+        spatial_weight = (
+            1.0 if inside_zone else 0.2
+        )
+
+        vertical_weight = self.VERTICAL_WEIGHTS[
+            vertical_zone
+        ]
+
+        risk_score = (
+            object_weight
+            * spatial_weight
+            * vertical_weight
+            * confidence
+        )
+
+        return risk_score
+
+    def get_risk_level(self, score):
+        """
+        Convert risk score into a category.
+        """
+
+        if score >= 0.6:
+            return "HIGH"
+
+        elif score >= 0.3:
+            return "MEDIUM"
+
+        else:
+            return "LOW"
+
+    def analyze_spatial_risk(
+        self,
+        image_width,
+        image_height
+    ):
+        """
+        Perform spatial analysis for every detection.
+        """
+
+        spatial_results = []
+
+        for detection in self.detections:
+
+            center_x, center_y = self.get_box_center(
+                detection["box"]
+            )
+
+            vertical_zone = self.get_vertical_zone(
+                center_y,
+                image_height
+            )
+
+            inside_zone = self.is_inside_danger_zone(
+                center_x,
+                center_y,
+                image_width,
+                image_height
+            )
+
+            risk_score = self.calculate_risk_score(
+                detection,
+                inside_zone,
+                vertical_zone
+            )
+
+            risk_level = self.get_risk_level(
+                risk_score
+            )
+
+            spatial_results.append(
+                {
+                    **detection,
+                    "center": (
+                        center_x,
+                        center_y
+                    ),
+                    "vertical_zone": vertical_zone,
+                    "inside_danger_zone": inside_zone,
+                    "risk_score": risk_score,
+                    "risk_level": risk_level
+                }
+            )
+
+        return spatial_results
 
     def count_objects(self):
         """
@@ -31,9 +233,14 @@ class ADASAnalyzer:
         }
 
         for detection in self.detections:
+
             label = detection["label"]
 
-            if label in {"car", "truck", "bus"}:
+            if label in {
+                "car",
+                "truck",
+                "bus"
+            }:
                 counts["vehicles"] += 1
 
             elif label == "motorcycle":
@@ -47,41 +254,109 @@ class ADASAnalyzer:
 
         return counts
 
-    def generate_warnings(self):
+    def generate_warnings(
+        self,
+        spatial_results
+    ):
         """
-        Generate simple ADAS warnings.
+        Generate aggregated ADAS warnings.
+
+        Multiple detections of the same object type
+        are combined into a single warning.
         """
+
+        warning_objects = {}
+
+        for detection in spatial_results:
+
+            label = detection["label"]
+            risk_level = detection["risk_level"]
+            inside_zone = detection["inside_danger_zone"]
+
+            # Ignore objects outside the ego-lane corridor
+            if not inside_zone:
+                continue
+
+            # Only MEDIUM and HIGH risk objects
+            if risk_level not in {"MEDIUM", "HIGH"}:
+                continue
+
+            if label not in warning_objects:
+                warning_objects[label] = {
+                    "count": 0,
+                    "highest_risk": risk_level
+                }
+
+            warning_objects[label]["count"] += 1
+
+            # HIGH takes priority over MEDIUM
+            if risk_level == "HIGH":
+                warning_objects[label]["highest_risk"] = "HIGH"
 
         warnings = []
 
-        labels = {
-            detection["label"]
-            for detection in self.detections
-        }
+        for label, information in warning_objects.items():
 
-        if "person" in labels:
-            warnings.append(
-                "Pedestrian detected"
-            )
+            count = information["count"]
+            risk_level = information["highest_risk"]
 
-        if "motorcycle" in labels:
-            warnings.append(
-                "Motorcycle detected"
-            )
+            if label == "person":
+                object_name = "pedestrian"
 
-        if "bicycle" in labels:
-            warnings.append(
-                "Bicycle detected"
-            )
+            elif label == "motorcycle":
+                object_name = "motorcycle"
+
+            elif label == "bicycle":
+                object_name = "bicycle"
+
+            else:
+                object_name = label
+
+            if count == 1:
+                warnings.append(
+                    f"{risk_level}: "
+                    f"{object_name.capitalize()} "
+                    f"in ego-lane"
+                )
+
+            else:
+                warnings.append(
+                    f"{risk_level}: "
+                    f"{count} {object_name}s "
+                    f"in ego-lane"
+                )
 
         return warnings
 
-    def analyze(self):
+    def analyze(
+        self,
+        image_width=None,
+        image_height=None
+    ):
         """
         Generate the complete ADAS analysis.
         """
 
+        spatial_results = None
+
+        if (
+            image_width is not None
+            and image_height is not None
+        ):
+            spatial_results = self.analyze_spatial_risk(
+                image_width,
+                image_height
+            )
+
+            warnings = self.generate_warnings(
+                spatial_results
+            )
+
+        else:
+            warnings = []
+
         return {
             "object_counts": self.count_objects(),
-            "warnings": self.generate_warnings()
+            "spatial_results": spatial_results,
+            "warnings": warnings
         }
