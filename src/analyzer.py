@@ -68,6 +68,24 @@ class ADASAnalyzer:
 
         return center_x, center_y
 
+    def get_box_bottom_center(self, box):
+        """
+        Calculate the bottom-center point of a bounding box.
+
+        Box format:
+            [xmin, ymin, xmax, ymax]
+
+        The bottom-center represents the approximate point
+        where the detected object meets the road.
+        """
+
+        xmin, ymin, xmax, ymax = box
+
+        bottom_center_x = (xmin + xmax) / 2
+        bottom_center_y = ymax
+
+        return bottom_center_x, bottom_center_y
+
     def get_vertical_zone(
         self,
         center_y,
@@ -114,11 +132,49 @@ class ADASAnalyzer:
             (center_x, center_y)
         )
 
+    def calculate_proximity_score(
+            self,
+            bottom_y,
+            box_height,
+            image_height
+    ):
+        """
+        Estimate relative proximity using the object's
+        bottom-center position and bounding-box height.
+
+        This is an image-based heuristic, NOT real-world
+        distance estimation.
+        """
+
+        normalized_bottom_y = bottom_y / image_height
+        normalized_height = box_height / image_height
+
+        proximity_score = (
+            0.6 * normalized_bottom_y
+            + 0.4 * normalized_height
+        )
+
+        return proximity_score
+
+    def get_proximity_level(self, proximity_score):
+        """
+        Convert proximity score into a simple category.
+        """
+
+        if proximity_score >= 0.50:
+            return "near"
+
+        if proximity_score >= 0.40:
+            return "medium"
+
+        return "far"
+
     def calculate_risk_score(
         self,
         detection,
         inside_zone,
-        vertical_zone
+        vertical_zone,
+        proximity_score
     ):
         """
         Calculate a simple heuristic risk score.
@@ -142,11 +198,17 @@ class ADASAnalyzer:
             vertical_zone
         ]
 
+        proximity_weight = (
+            0.8
+            + (0.4 * proximity_score)
+        )
+
         risk_score = (
             object_weight
             * spatial_weight
             * vertical_weight
             * confidence
+            * proximity_weight
         )
 
         return risk_score
@@ -182,14 +244,33 @@ class ADASAnalyzer:
                 detection["box"]
             )
 
+            bottom_x, bottom_y = self.get_box_bottom_center(
+                detection["box"]
+            )
+
+            xmin, ymin, xmax, ymax = detection["box"]
+
+            box_width = xmax - xmin
+            box_height = ymax - ymin
+
+            proximity_score = self.calculate_proximity_score(
+                bottom_y,
+                box_height,
+                image_height
+            )
+
+            proximity = self.get_proximity_level(
+                proximity_score
+            )
+
             vertical_zone = self.get_vertical_zone(
                 center_y,
                 image_height
             )
 
             inside_zone = self.is_inside_danger_zone(
-                center_x,
-                center_y,
+                bottom_x,
+                bottom_y,
                 image_width,
                 image_height
             )
@@ -197,7 +278,8 @@ class ADASAnalyzer:
             risk_score = self.calculate_risk_score(
                 detection,
                 inside_zone,
-                vertical_zone
+                vertical_zone,
+                proximity_score
             )
 
             risk_level = self.get_risk_level(
@@ -211,7 +293,13 @@ class ADASAnalyzer:
                         center_x,
                         center_y
                     ),
+                    "bottom_center": (
+                        bottom_x,
+                        bottom_y
+                    ),
                     "vertical_zone": vertical_zone,
+                    "proximity_score": proximity_score,
+                    "proximity": proximity,
                     "inside_danger_zone": inside_zone,
                     "risk_score": risk_score,
                     "risk_level": risk_level
