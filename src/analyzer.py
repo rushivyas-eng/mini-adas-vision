@@ -180,38 +180,74 @@ class ADASAnalyzer:
         Calculate a simple heuristic risk score.
 
         This is NOT a collision probability.
+
+        Risk is composed of:
+            - Object severity      : 30%
+            - Ego-lane presence    : 30%
+            - Proximity            : 25%
+            - Detection confidence : 15%
+
+        Final score is normalized to 0.0 - 1.0.
         """
 
         label = detection["label"]
         confidence = detection["score"]
+
+        # --------------------------------------------------
+        # 1. Object severity
+        # --------------------------------------------------
 
         object_weight = self.OBJECT_WEIGHTS.get(
             label,
             0.5
         )
 
-        spatial_weight = (
-            1.0 if inside_zone else 0.2
+        # --------------------------------------------------
+        # 2. Ego-lane contribution
+        # --------------------------------------------------
+
+        lane_score = 1.0 if inside_zone else 0.0
+
+        # --------------------------------------------------
+        # 3. Proximity contribution
+        # --------------------------------------------------
+
+        proximity_score = max(
+            0.0,
+            min(1.0, proximity_score)
         )
 
-        vertical_weight = self.VERTICAL_WEIGHTS[
-            vertical_zone
-        ]
+        # --------------------------------------------------
+        # 4. Confidence contribution
+        # --------------------------------------------------
 
-        proximity_weight = (
-            0.8
-            + (0.4 * proximity_score)
+        confidence = max(
+            0.0,
+            min(1.0, confidence)
         )
+
+        # --------------------------------------------------
+        # Weighted risk calculation
+        # --------------------------------------------------
 
         risk_score = (
-            object_weight
-            * spatial_weight
-            * vertical_weight
-            * confidence
-            * proximity_weight
+            0.30 * object_weight
+            + 0.30 * lane_score
+            + 0.25 * proximity_score
+            + 0.15 * confidence
+        )
+
+        # --------------------------------------------------
+        # Safety clamp
+        # --------------------------------------------------
+
+        risk_score = max(
+            0.0,
+            min(1.0, risk_score)
         )
 
         return risk_score
+
 
     def get_risk_level(self, score):
         """
