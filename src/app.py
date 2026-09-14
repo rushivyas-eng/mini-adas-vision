@@ -10,22 +10,26 @@ from analyzer import ADASAnalyzer
 
 
 def visualize_detections(
-    image,
-    spatial_results,
-    danger_zone
+        image,
+        spatial_results,
+        danger_zone
 ):
     """
-    Display medium/high-risk detections together
-    with the approximate ego-lane corridor.
+    Visualize ADAS-relevant detections.
 
-    Low-risk detections are hidden to reduce visual noise.
+    Low-risk detections are hidden.
+    MEDIUM and HIGH-risk detections are displayed.
+    Only the highest-risk detections received labels.
     """
 
     width = image.width
     height = image.height
 
+    # ----------------------------------------------
     # Convert relative danger-zone coordinates
-    # into image pixel coordinates.
+    # to image pixel coordinates.
+    # ----------------------------------------------
+
     zone_points = [
         (
             x * width,
@@ -38,9 +42,9 @@ def visualize_detections(
 
     ax.imshow(image)
 
-    # -------------------------------------------------
+    # ------------------------------------------
     # Draw ego-lane corridor
-    # -------------------------------------------------
+    # ------------------------------------------
 
     polygon = Polygon(
         zone_points,
@@ -51,45 +55,62 @@ def visualize_detections(
 
     ax.add_patch(polygon)
 
-    # -------------------------------------------------
-    # Select relevant detections
-    # -------------------------------------------------
+    # -------------------------------------------
+    # Select MEDIUM and HIGH-risk detections
+    # -------------------------------------------
 
     relevant = [
         detection
         for detection in spatial_results
-        if detection["risk_level"] in {"MEDIUM", "HIGH"}
+        if detection["risk_level"] in {
+            "MEDIUM",
+            "HIGH"
+        }
     ]
 
-    # Sort highest risk first
+    # Highest risk first
     relevant.sort(
         key=lambda detection: detection["risk_score"],
         reverse=True
     )
 
-    # -------------------------------------------------
+    # ------------------------------------------------
     # Draw detections
-    # -------------------------------------------------
+    # ------------------------------------------------
 
     for index, detection in enumerate(relevant):
 
         label = detection["label"]
-        score = detection["score"]
+        confidence = detection["score"]
 
         xmin, ymin, xmax, ymax = detection["box"]
 
         center_x, center_y = detection["center"]
 
+        bottom_x, bottom_y = detection["bottom_center"]
+
         risk_level = detection["risk_level"]
         risk_score = detection["risk_score"]
 
-        vertical_zone = detection["vertical_zone"]
+        proximity = detection["proximity"]
 
-        # Thicker box for HIGH-risk objects
+        # ------------------------------------
+        # Risk-dependent visualization
+        # ------------------------------------
+
         if risk_level == "HIGH":
+
             linewidth = 4
+            label_size = 9
+
         else:
+
             linewidth = 2
+            label_size = 8
+
+        # ------------------------------------
+        # Bouding box
+        # ------------------------------------
 
         rectangle = Rectangle(
             (xmin, ymin),
@@ -101,27 +122,39 @@ def visualize_detections(
 
         ax.add_patch(rectangle)
 
+        # ---------------------------------
         # Center point
+        # ---------------------------------
+
         ax.scatter(
             center_x,
             center_y,
-            s=35
+            s=30
         )
 
-        # -------------------------------------------------
-        # Only label the most important detections
-        # -------------------------------------------------
+        # --------------------------------
+        # Bottom-center point
+        # --------------------------------
 
-        # Show labels for the top 8 detections.
-        if index < 8:
+        ax.scatter(
+            bottom_x,
+            bottom_y,
+            s=45
+        )
+
+        # ---------------------------------------------
+        # Label only top 5 highest-risk detections
+        # ---------------------------------------------
+
+        if index < 5:
 
             text = (
-                f"{label} {score:.2f}\n"
-                f"{vertical_zone.upper()} | {risk_level}\n"
+                f"{label} {confidence:.2f}\n"
+                f"{risk_level} | "
+                f"{proximity.upper()}\n"
                 f"risk={risk_score:.2f}"
             )
 
-            # Put the label slightly above the box.
             label_y = max(
                 5,
                 ymin - 5
@@ -131,10 +164,59 @@ def visualize_detections(
                 xmin,
                 label_y,
                 text,
-                fontsize=8,
+                fontsize=label_size,
                 verticalalignment="bottom",
                 backgroundcolor="white"
             )
+
+    # ------------------------------------------------
+    # ADAS Summary
+    # ------------------------------------------------
+
+    high_count = sum(
+        1
+        for detection in spatial_results
+        if detection["risk_level"] == "HIGH"
+        and detection["inside_danger_zone"]
+    )
+
+    medium_count = sum(
+        1
+        for detection in spatial_results
+        if detection["risk_level"] == "MEDIUM"
+        and detection["inside_danger_zone"]
+    )
+
+    ego_lane_count = sum(
+        1
+        for detection in spatial_results
+        if detection["inside_danger_zone"]
+    )
+
+    # ------------------------------------------------
+    # Display summary
+    # ------------------------------------------------
+
+    summary = (
+        f"ADAS SUMMARY | "
+        f"HIGH: {high_count} "
+        f"MEDIUM: {medium_count} "
+        f"EGO-LANE OBJECTS: {ego_lane_count}"
+    )
+
+    ax.text(
+        0.02,
+        0.97,
+        summary,
+        transform=ax.transAxes,
+        fontsize=11,
+        verticalalignment="top",
+        backgroundcolor="white"
+    )
+
+    # -------------------------------------------------
+    # Title
+    # -------------------------------------------------
 
     ax.set_title(
         "Mini ADAS — Spatial Risk Analysis"

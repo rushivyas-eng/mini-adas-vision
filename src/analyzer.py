@@ -249,19 +249,23 @@ class ADASAnalyzer:
         return risk_score
 
 
-    def get_risk_level(self, score):
+    def get_risk_level(self, risk_score, proximity):
         """
-        Convert risk score into a category.
+        Classify risk using the heuristic risk score
+        and estimated image-based proximity.
+
+        HIGH risk requires the object to be sufficiently close.
+        This is a simple ADAS-style heuristic, not a
+        collision probability.
         """
 
-        if score >= 0.6:
+        if risk_score >= 0.6 and proximity in {"near", "medium"}:
             return "HIGH"
 
-        elif score >= 0.3:
+        if risk_score >= 0.3:
             return "MEDIUM"
 
-        else:
-            return "LOW"
+        return "LOW"
 
     def analyze_spatial_risk(
         self,
@@ -319,7 +323,8 @@ class ADASAnalyzer:
             )
 
             risk_level = self.get_risk_level(
-                risk_score
+                risk_score,
+                proximity
             )
 
             spatial_results.append(
