@@ -10,6 +10,15 @@ class ADASAnalyzer:
     They are NOT collision probabilities.
     """
 
+    ADAS_RELEVANT_OBJECTS = {
+        "person",
+        "bicycle",
+        "motorcycle",
+        "car",
+        "bus",
+        "truck",
+    }
+
     VEHICLES = {
         "car",
         "truck",
@@ -400,7 +409,10 @@ class ADASAnalyzer:
 
             label = detection["label"]
             risk_level = detection["risk_level"]
-            inside_zone = detection["inside_danger_zone"]
+            inside_zone = (
+                detection["inside_danger_zone"]
+                and detection["label"] in self.ADAS_RELEVANT_OBJECTS
+            )
 
             # Ignore objects outside the ego-lane corridor
             if not inside_zone:
