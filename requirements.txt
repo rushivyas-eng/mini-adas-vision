@@ -1,7 +1,9 @@
-transformers
-torch
+transformers==5.15.0
+torch==2.13.0
 torchvision
+timm==1.0.28
 pillow
 matplotlib
+pandas==3.0.5
+gradio==6.27.0
 jupyter
-streamlit
